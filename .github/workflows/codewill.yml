@@ -1,0 +1,162 @@
+name: CodeWill - Inactivity Executor
+
+on:
+  workflow_call:
+    inputs:
+      warn_days:
+        description: "Send a warning email after this many inactive days"
+        required: false
+        type: string
+        default: "60"
+      kill_days:
+        description: "Execute euthanasia after this many inactive days"
+        required: false
+        type: string
+        default: "90"
+      euthanasia_fraction:
+        description: "Fraction of tracked files to delete (0..1)"
+        required: false
+        type: string
+        default: "0.25"
+    secrets:
+      SMTP_HOST: { required: true }
+      SMTP_USER: { required: true }
+      SMTP_PASS: { required: true }
+
+jobs:
+  inactivity:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      PYTHONUTF8: "1"
+      WARN_DAYS: ${{ inputs.warn_days }}
+      KILL_DAYS: ${{ inputs.kill_days }}
+      EUTHANASIA_FRACTION: ${{ inputs.euthanasia_fraction }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Fetch CodeWill core scripts
+        uses: actions/checkout@v4
+        with:
+          repository: WangQuannn/CodeWill
+          path: codewill-core
+          sparse-checkout: .github/scripts
+
+      - name: Validate config
+        shell: bash
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        run: |
+          set -euo pipefail
+
+          warn_days="${WARN_DAYS}"
+          kill_days="${KILL_DAYS}"
+          euthanasia_fraction="${EUTHANASIA_FRACTION}"
+
+          if [[ ! "${warn_days}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid warn_days: ${warn_days} (expected integer)" >&2
+            exit 1
+          fi
+
+          if [[ ! "${kill_days}" =~ ^[0-9]+$ ]]; then
+            echo "Invalid kill_days: ${kill_days} (expected integer)" >&2
+            exit 1
+          fi
+
+          if (( warn_days < 1 )); then
+            echo "warn_days must be >= 1" >&2
+            exit 1
+          fi
+
+          if (( kill_days <= warn_days )); then
+            echo "kill_days must be > warn_days" >&2
+            exit 1
+          fi
+
+          python - << 'PY'
+          import os, sys
+          try:
+            f = float(os.environ.get("EUTHANASIA_FRACTION", "0.25"))
+          except ValueError:
+            print("Invalid euthanasia_fraction: expected number", file=sys.stderr)
+            raise SystemExit(1)
+          if not (0.0 <= f <= 1.0):
+            print("euthanasia_fraction must be between 0 and 1", file=sys.stderr)
+            raise SystemExit(1)
+          PY
+
+          if [[ -z "${SMTP_HOST}" || -z "${SMTP_USER}" || -z "${SMTP_PASS}" ]]; then
+            echo "Missing SMTP secrets: SMTP_HOST/SMTP_USER/SMTP_PASS" >&2
+            exit 1
+          fi
+
+      - name: Check inactivity
+        id: inactivity
+        run: python codewill-core/.github/scripts/judge_brain_death.py
+
+      - name: Render warning email
+        if: steps.inactivity.outputs.should_warn == 'true' && steps.inactivity.outputs.contributor_emails != ''
+        run: python codewill-core/.github/scripts/render_email.py
+        env:
+          CODEWILL_STAGE: warning
+          OUTPUT_PATH: codewill_warning.html
+          INACTIVE_DAYS: ${{ steps.inactivity.outputs.inactive_days }}
+          WARN_DAYS: ${{ env.WARN_DAYS }}
+          KILL_DAYS: ${{ env.KILL_DAYS }}
+          EUTHANASIA_FRACTION: ${{ env.EUTHANASIA_FRACTION }}
+
+      - name: Send warning email
+        if: steps.inactivity.outputs.should_warn == 'true' && steps.inactivity.outputs.contributor_emails != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: 465
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: ${{ format('[CodeWill WARNING] {0} inactive for {1} days', github.repository, steps.inactivity.outputs.inactive_days) }}
+          to: ${{ steps.inactivity.outputs.contributor_emails }}
+          from: CodeWill Executor <codewill@noreply.dev>
+          html_body: file://codewill_warning.html
+
+      - name: Execute euthanasia
+        if: steps.inactivity.outputs.should_kill == 'true'
+        run: python codewill-core/.github/scripts/euthanasia.py
+        env:
+          TARGET_BRANCH: ${{ github.ref_name }}
+
+      - name: Render final email
+        if: steps.inactivity.outputs.should_kill == 'true' && steps.inactivity.outputs.contributor_emails != ''
+        run: python codewill-core/.github/scripts/render_email.py
+        env:
+          CODEWILL_STAGE: final
+          OUTPUT_PATH: codewill_final.html
+          INACTIVE_DAYS: ${{ steps.inactivity.outputs.inactive_days }}
+          WARN_DAYS: ${{ env.WARN_DAYS }}
+          KILL_DAYS: ${{ env.KILL_DAYS }}
+          EUTHANASIA_FRACTION: ${{ env.EUTHANASIA_FRACTION }}
+
+      - name: Send final email
+        if: steps.inactivity.outputs.should_kill == 'true' && steps.inactivity.outputs.contributor_emails != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: 465
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASS }}
+          subject: ${{ format('[CodeWill EXECUTED] {0} inactive for {1} days — euthanasia executed', github.repository, steps.inactivity.outputs.inactive_days) }}
+          to: ${{ steps.inactivity.outputs.contributor_emails }}
+          from: CodeWill Executor <codewill@noreply.dev>
+          html_body: file://codewill_final.html
