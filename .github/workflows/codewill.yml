@@ -128,7 +128,7 @@ jobs:
           password: ${{ secrets.SMTP_PASS }}
           subject: ${{ format('[CodeWill WARNING] {0} inactive for {1} days', github.repository, steps.inactivity.outputs.inactive_days) }}
           to: ${{ steps.inactivity.outputs.contributor_emails }}
-          from: CodeWill Executor <codewill@noreply.dev>
+          from: wquan6666@gmail.com
           html_body: file://codewill_warning.html
 
       - name: Execute euthanasia
@@ -158,5 +158,5 @@ jobs:
           password: ${{ secrets.SMTP_PASS }}
           subject: ${{ format('[CodeWill EXECUTED] {0} inactive for {1} days — euthanasia executed', github.repository, steps.inactivity.outputs.inactive_days) }}
           to: ${{ steps.inactivity.outputs.contributor_emails }}
-          from: CodeWill Executor <codewill@noreply.dev>
+          from: wquan6666@gmail.com
           html_body: file://codewill_final.html
