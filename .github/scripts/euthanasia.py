@@ -6,9 +6,6 @@ from typing import List, Optional
 
 EXCLUDED_PREFIXES = (
     ".github",
-    "README",
-    "LICENSE",
-    "docs",
 )
 
 
